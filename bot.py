@@ -29,7 +29,7 @@ def get_page_html():
         page = browser.new_page()
 
         page.goto(URL, timeout=60000)
-        time.sleep(5)  # дать JS прогрузиться
+        time.sleep(5)
 
         html = page.content()
 
@@ -37,15 +37,13 @@ def get_page_html():
         return html
 
 
-# ---------------- ПАРСИНГ ----------------
+# ---------------- PARSE ----------------
 def extract_slots(html):
-    # максимально простой способ (чтобы не ломалось)
-    # ищем любые времена типа 08:00 - 19:00
     import re
     return re.findall(r"\b([01]?\d|2[0-3]):[0-5]\d\b", html)
 
 
-# ---------------- ОСНОВНОЙ ЦИКЛ ----------------
+# ---------------- BOT LOOP ----------------
 def bot_loop():
     print("Бот запущен")
     send_message("Бот запущен 🚀")
@@ -64,7 +62,7 @@ def bot_loop():
             new_slots = slots - last_slots
 
             if new_slots:
-                msg = "🔥 Найдены слоты:\n" + "\n".join(sorted(new_slots))
+                msg = "🔥 Новые слоты:\n" + "\n".join(sorted(new_slots))
                 send_message(msg)
                 print("Отправлено:", new_slots)
 
@@ -77,15 +75,18 @@ def bot_loop():
         time.sleep(60)
 
 
-# ---------------- FLASK ----------------
+# ---------------- FLASK ROUTE ----------------
 @app.route("/")
 def home():
     return "Bot is alive"
 
 
 # ---------------- START ----------------
-if __name__ == "__main__":
-    thread = threading.Thread(target=bot_loop)
-    thread.start()
+def start_bot():
+    time.sleep(3)  # даём Flask подняться
+    bot_loop()
 
+
+if __name__ == "__main__":
+    threading.Thread(target=start_bot, daemon=True).start()
     app.run(host="0.0.0.0", port=10000)
