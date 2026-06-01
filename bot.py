@@ -81,18 +81,16 @@ def home():
     return "Bot is alive"
 
 
-# ---------------- START (FIXED FOR RENDER) ----------------
+# ---------------- START ----------------
 def start_bot():
     time.sleep(3)
     bot_loop()
 
 
-@app.before_first_request
-def launch_bot():
-    thread = threading.Thread(target=start_bot, daemon=True)
-    thread.start()
-
-
 if __name__ == "__main__":
     print("Flask starting...")
+
+    t = threading.Thread(target=start_bot, daemon=True)
+    t.start()
+
     app.run(host="0.0.0.0", port=10000)
