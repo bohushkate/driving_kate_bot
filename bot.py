@@ -107,14 +107,16 @@ def home():
 
 # ---------------- START ----------------
 def start_bot():
-    time.sleep(3)
+    print("🔥 THREAD FUNCTION CALLED")
+    time.sleep(2)
     bot_loop()
 
 
-if __name__ == "__main__":
-    print("🚀 STARTING APP")
+print("🧵 BEFORE THREAD")
 
-    t = threading.Thread(target=start_bot, daemon=True)
-    t.start()
+t = threading.Thread(target=start_bot, daemon=True)
+t.start()
 
-    app.run(host="0.0.0.0", port=10000)
+print("🧵 AFTER THREAD START")
+
+app.run(host="0.0.0.0", port=10000)
