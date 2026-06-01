@@ -2,6 +2,8 @@ import os
 import time
 import threading
 import requests
+import re
+
 from flask import Flask
 from playwright.sync_api import sync_playwright
 
@@ -17,8 +19,10 @@ URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s1
 # ---------------- TELEGRAM ----------------
 def send_message(text):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": text})
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": text}
+        )
     except Exception as e:
         print("Telegram error:", e)
 
@@ -26,13 +30,26 @@ def send_message(text):
 # ---------------- PLAYWRIGHT ----------------
 def get_page_html():
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-setuid-sandbox"]
+        )
+
         page = browser.new_page()
 
-        page.goto(URL, timeout=60000)
-        time.sleep(5)
+        print("➡️ OPENING URL:", URL)
+
+        response = page.goto(URL, timeout=60000)
+
+        print("➡️ HTTP STATUS:", response.status if response else "NO RESPONSE")
+
+        # даём JS догрузиться
+        page.wait_for_timeout(8000)
 
         html = page.content()
+
+        print("➡️ HTML SIZE:", len(html))
+        print("➡️ HTML PREVIEW:\n", html[:800])
 
         browser.close()
         return html
@@ -40,7 +57,6 @@ def get_page_html():
 
 # ---------------- PARSE ----------------
 def extract_slots(html):
-    import re
     return re.findall(r"\b([01]?\d|2[0-3]):[0-5]\d\b", html)
 
 
@@ -53,24 +69,32 @@ def bot_loop():
 
     while True:
         try:
-            print("Проверяю сайт...")
+            print("🔄 Checking site...")
 
             html = get_page_html()
+
+            # ❗ защита от пустой страницы
+            if not html or len(html) < 1000:
+                print("❌ EMPTY HTML DETECTED")
+                send_message("⚠️ Пустой HTML (страница не загрузилась или блокировка)")
+                time.sleep(60)
+                continue
+
             slots = set(extract_slots(html))
 
-            print("Найдено:", slots)
+            print("🎯 SLOTS FOUND:", slots)
 
             new_slots = slots - last_slots
 
             if new_slots:
                 msg = "🔥 Новые слоты:\n" + "\n".join(sorted(new_slots))
                 send_message(msg)
-                print("Отправлено:", new_slots)
+                print("📩 SENT:", new_slots)
 
             last_slots = slots
 
         except Exception as e:
-            print("Ошибка:", e)
+            print("❌ ERROR:", e)
             send_message(f"Ошибка: {e}")
 
         time.sleep(60)
@@ -84,14 +108,12 @@ def home():
 
 # ---------------- START ----------------
 def start_bot():
-    time.sleep(3)
-    bot_loop()
+    thread = threading.Thread(target=bot_loop, daemon=True)
+    thread.start()
 
+
+start_bot()
 
 if __name__ == "__main__":
     print("Flask starting...")
-
-    t = threading.Thread(target=start_bot, daemon=True)
-    t.start()
-
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
