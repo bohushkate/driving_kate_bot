@@ -1,4 +1,3 @@
-import os
 import time
 import threading
 from flask import Flask
@@ -8,87 +7,139 @@ URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s1
 
 app = Flask(__name__)
 
-# -------------------
-# KEEP RENDER ALIVE
-# -------------------
-@app.route("/", methods=["GET", "HEAD"])
+last_result = {}
+
+
+@app.route("/")
 def home():
-    return "OK", 200
+    return "Bot is alive"
 
 
-# -------------------
-# SLOT CHECKER
-# -------------------
+@app.route("/ping")
+def ping():
+    return "pong"
+
+
+def is_clickable_day(el):
+    """
+    Проверяем, что день реально активный (жирный/доступный)
+    """
+    try:
+        if not el.is_visible() or not el.is_enabled():
+            return False
+
+        cls = (el.get_attribute("class") or "").lower()
+
+        # типичные маркеры доступных дней
+        if any(x in cls for x in ["disabled", "off", "past", "unavailable"]):
+            return False
+
+        # иногда доступные дни имеют data-атрибуты
+        data = el.get_attribute("data-state") or ""
+        if "disabled" in data:
+            return False
+
+        return True
+    except:
+        return False
+
+
 def check_slots():
-    print("\n🧵 START SLOT CHECK")
+    global last_result
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+
         page = browser.new_page()
 
-        # 🔥 ловим все ответы API
-        def handle_response(response):
-            url = response.url.lower()
+        try:
+            print("🌐 Open calendar...")
+            page.goto(URL, timeout=60000)
 
-            if "time" in url or "slot" in url or "select" in url:
-                print("\n📡 API CALL:", response.url)
+            page.wait_for_timeout(7000)
+            page.wait_for_load_state("networkidle")
+
+            # 🔥 ищем все элементы календаря
+            days = page.locator("div, button, td").filter(has_text=r"^\d{1,2}$")
+
+            count = days.count()
+            print("📅 raw days:", count)
+
+            available_days = []
+
+            # ограничим чтобы не кликать 100 раз
+            for i in range(min(count, 15)):
+                el = days.nth(i)
 
                 try:
-                    data = response.json()
-                    print("📦 JSON RESPONSE:")
-                    print(data)
-                except:
-                    try:
-                        print("📄 TEXT RESPONSE:")
-                        print(response.text()[:500])
-                    except:
-                        pass
+                    text = el.inner_text().strip()
 
-        page.on("response", handle_response)
+                    if not text.isdigit():
+                        continue
 
-        print("🌐 loading page...")
-        page.goto(URL, timeout=60000)
+                    # 🔥 ГЛАВНАЯ ПРОВЕРКА "ЖИРНЫЙ ДЕНЬ"
+                    if not is_clickable_day(el):
+                        continue
 
-        page.wait_for_timeout(5000)
+                    print(f"👉 clicking day {text}")
+                    el.click()
 
-        # -------------------
-        # TRY CLICK FIRST DATE
-        # -------------------
-        try:
-            print("📅 clicking first available date...")
+                    # ждём появления слотов
+                    page.wait_for_timeout(2500)
 
-            page.click("div[role='button']", timeout=5000)
-        except:
-            print("⚠️ no date clicked (selector may differ)")
+                    # ищем реальные времена
+                    times = page.locator("text=/([01]?\\d|2[0-3]):[0-5]\\d/")
 
-        page.wait_for_timeout(8000)
+                    if times.count() > 0:
+                        found_times = [t.inner_text() for t in times.all()]
+                        print("⏰ TIMES:", found_times)
 
-        print("✅ DONE CHECK")
+                        available_days.append({
+                            "day": text,
+                            "times": list(set(found_times))
+                        })
 
-        browser.close()
+                except Exception as e:
+                    print("skip:", e)
+                    continue
 
+            last_result = {
+                "status": "checked",
+                "available": available_days,
+                "found": len(available_days) > 0,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
 
-# -------------------
-# LOOP
-# -------------------
-def loop():
-    print("🔥 BOT LOOP STARTED")
+            print("✅ RESULT:", available_days)
 
-    while True:
-        try:
-            check_slots()
         except Exception as e:
+            last_result = {
+                "status": "error",
+                "error": str(e),
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+            }
             print("❌ ERROR:", e)
 
-        time.sleep(60)
+        finally:
+            browser.close()
 
 
-# -------------------
-# START
-# -------------------
+def loop():
+    while True:
+        print("🔁 checking...")
+        check_slots()
+        time.sleep(120)
+
+
+def start_thread():
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+
+
 if __name__ == "__main__":
-
-    threading.Thread(target=loop, daemon=True).start()
-
-    print("🚀 STARTING FLASK")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    print("🚀 STARTING BOT LOOP")
+    start_thread()
+    app.run(host="0.0.0.0", port=10000)
