@@ -1,146 +1,97 @@
-import time
-import threading
-from flask import Flask
+from flask import Flask, jsonify
+from threading import Thread
 from playwright.sync_api import sync_playwright
+import time
 
-# ----- URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m3031495s10838308"
 URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s10838308"
 
 app = Flask(__name__)
 
-last_result = {}
+# сюда складываем найденные слоты
+found_slots = []
 
+# -------------------------
+# FLASK
+# -------------------------
 
 @app.route("/")
 def home():
     return "Bot is alive"
 
+@app.route("/slots")
+def slots():
+    return jsonify(found_slots)
 
-@app.route("/ping")
-def ping():
-    return "pong"
 
-
-def is_clickable_day(el):
-    """
-    Проверяем, что день реально активный (жирный/доступный)
-    """
-    try:
-        if not el.is_visible() or not el.is_enabled():
-            return False
-
-        cls = (el.get_attribute("class") or "").lower()
-
-        # типичные маркеры доступных дней
-        if any(x in cls for x in ["disabled", "off", "past", "unavailable"]):
-            return False
-
-        # иногда доступные дни имеют data-атрибуты
-        data = el.get_attribute("data-state") or ""
-        if "disabled" in data:
-            return False
-
-        return True
-    except:
-        return False
-
+# -------------------------
+# PLAYWRIGHT LOGIC
+# -------------------------
 
 def check_slots():
-    global last_result
+    global found_slots
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
-
-        page = browser.new_page()
-
+    while True:
         try:
-            print("🌐 Open calendar...")
-            page.goto(URL, timeout=60000)
+            print("🔁 checking slots...")
 
-            page.wait_for_timeout(7000)
-            page.wait_for_load_state("networkidle")
+            with sync_playwright() as p:
+                browser = p.chromium.launch(headless=True)
+                page = browser.new_page()
 
-            # 🔥 ищем все элементы календаря
-            days = page.locator("div, button, td").filter(has_text=r"^\d{1,2}$")
+                page.goto(URL, wait_until="networkidle")
 
-            count = days.count()
-            print("📅 raw days:", count)
+                page.wait_for_timeout(5000)
 
-            available_days = []
+                days = page.locator("td, .day, .calendar-day, [role='button']").all()
 
-            # ограничим чтобы не кликать 100 раз
-            for i in range(min(count, 15)):
-                el = days.nth(i)
+                print(f"📅 days found: {len(days)}")
 
-                try:
-                    text = el.inner_text().strip()
+                temp_slots = []
 
-                    if not text.isdigit():
+                for i in range(len(days)):
+                    try:
+                        days[i].click()
+                        page.wait_for_timeout(2500)
+
+                        times = page.locator("text=/\\b\\d{1,2}:\\d{2}\\b/").all_text_contents()
+
+                        if times:
+                            print("🔥 slots:", times)
+                            temp_slots.extend(times)
+
+                    except:
                         continue
 
-                    # 🔥 ГЛАВНАЯ ПРОВЕРКА "ЖИРНЫЙ ДЕНЬ"
-                    if not is_clickable_day(el):
-                        continue
+                browser.close()
 
-                    print(f"👉 clicking day {text}")
-                    el.click()
-
-                    # ждём появления слотов
-                    page.wait_for_timeout(2500)
-
-                    # ищем реальные времена
-                    times = page.locator("text=/([01]?\\d|2[0-3]):[0-5]\\d/")
-
-                    if times.count() > 0:
-                        found_times = [t.inner_text() for t in times.all()]
-                        print("⏰ TIMES:", found_times)
-
-                        available_days.append({
-                            "day": text,
-                            "times": list(set(found_times))
-                        })
-
-                except Exception as e:
-                    print("skip:", e)
-                    continue
-
-            last_result = {
-                "status": "checked",
-                "available": available_days,
-                "found": len(available_days) > 0,
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-
-            print("✅ RESULT:", available_days)
+                if temp_slots:
+                    found_slots = list(set(temp_slots))
+                    print("✅ updated slots:", found_slots)
+                else:
+                    print("❌ no slots")
 
         except Exception as e:
-            last_result = {
-                "status": "error",
-                "error": str(e),
-                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            print("❌ ERROR:", e)
+            print("ERROR:", e)
 
-        finally:
-            browser.close()
+        # пауза между проверками (чтобы не убить сайт и Render)
+        time.sleep(60)
 
 
-def loop():
-    while True:
-        print("🔁 checking...")
-        check_slots()
-        time.sleep(120)
-
+# -------------------------
+# START BOT THREAD
+# -------------------------
 
 def start_thread():
-    t = threading.Thread(target=loop, daemon=True)
+    t = Thread(target=check_slots, daemon=True)
     t.start()
 
+
+# -------------------------
+# MAIN
+# -------------------------
 
 if __name__ == "__main__":
     print("🚀 STARTING BOT LOOP")
     start_thread()
+
     app.run(host="0.0.0.0", port=10000)
