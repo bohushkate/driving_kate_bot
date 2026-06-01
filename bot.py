@@ -1,79 +1,130 @@
-from flask import Flask, jsonify
-from threading import Thread
-from playwright.sync_api import sync_playwright
+import os
 import time
+import threading
+import requests
+from playwright.sync_api import sync_playwright
+
+# ===== ENV =====
+TOKEN = os.environ["TOKEN"]
+CHAT_ID = os.environ["CHAT_ID"]
 
 # ----- URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m3031495s10838308"
 URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s10838308"
 
-app = Flask(__name__)
+CHECK_EVERY = 60  # секунд
 
-status = {
-    "has_slots": False,
-    "message": "not checked yet"
-}
-
-
-# ---------------- FLASK ----------------
-
-@app.route("/")
-def home():
-    return "bot alive"
-
-@app.route("/status")
-def get_status():
-    return jsonify(status)
+# ===== TELEGRAM =====
+def send_message(text):
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": text},
+            timeout=10
+        )
+        print("Telegram:", r.status_code)
+    except Exception as e:
+        print("Telegram error:", e)
 
 
-# ---------------- CHECKER ----------------
+# ===== CORE CHECK =====
+def check_slots():
+    found_slots = []
 
-def check_loop():
-    global status
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+
+        print("🌐 opening calendar...")
+        page.goto(URL, timeout=60000)
+
+        # ждём JS календарь
+        page.wait_for_timeout(5000)
+
+        # ===== 1. ищем активные дни =====
+        days = page.query_selector_all("td, button, div")
+
+        clickable_days = []
+
+        for d in days:
+            text = (d.inner_text() or "").strip()
+            cls = (d.get_attribute("class") or "").lower()
+
+            # день = цифра
+            if not text.isdigit():
+                continue
+
+            # фильтр "активных" (гибкий, не ломается от верстки)
+            if any(x in cls for x in [
+                "active", "available", "select", "enabled", "click"
+            ]):
+                clickable_days.append(d)
+
+        print(f"📅 found clickable days: {len(clickable_days)}")
+
+        # ===== 2. кликаем дни и ищем время =====
+        for d in clickable_days[:10]:  # ограничим, чтобы не долбить сайт
+            try:
+                d.click()
+                page.wait_for_timeout(2000)
+
+                # ищем время (как ты говорила — 12:00 появляется)
+                times = page.query_selector_all("text=12:00")
+
+                if times:
+                    found_slots.append("12:00")
+
+            except Exception as e:
+                print("click error:", e)
+
+        browser.close()
+
+    return list(set(found_slots))
+
+
+# ===== LOOP =====
+def bot_loop():
+    print("🚀 bot started")
+    send_message("🚀 Бот запущен")
+
+    last_sent = set()
 
     while True:
         try:
             print("🔁 checking calendar...")
 
-            with sync_playwright() as p:
-                browser = p.chromium.launch(headless=True)
-                page = browser.new_page()
+            slots = check_slots()
 
-                page.goto(URL, wait_until="networkidle")
-                page.wait_for_timeout(5000)
+            new_slots = [s for s in slots if s not in last_sent]
 
-                # 🔥 ключевой момент: жирные даты (обычно bold / active / available)
-                bold_days = page.locator("b, strong, .bold, .active, .available").all_text_contents()
+            if new_slots:
+                msg = "🔥 Найдены слоты:\n" + "\n".join(new_slots)
+                send_message(msg)
 
-                # чистим мусор
-                bold_days = [d.strip() for d in bold_days if d.strip()]
+                last_sent.update(new_slots)
 
-                print("FOUND BOLD:", bold_days)
-
-                if bold_days:
-                    status["has_slots"] = True
-                    status["message"] = f"🔥 AVAILABLE DAYS: {bold_days}"
-                else:
-                    status["has_slots"] = False
-                    status["message"] = "no slots"
-
-                browser.close()
+                print("SENT:", new_slots)
+            else:
+                print("😴 no slots")
 
         except Exception as e:
-            status["has_slots"] = False
-            status["message"] = f"error: {e}"
-            print("ERROR:", e)
+            print("💥 LOOP ERROR:", e)
 
-        time.sleep(60)
+        time.sleep(CHECK_EVERY)
 
 
-# ---------------- START ----------------
+# ===== START =====
+threading.Thread(target=bot_loop, daemon=True).start()
 
-def start_thread():
-    t = Thread(target=check_loop, daemon=True)
-    t.start()
+
+# ===== KEEP ALIVE (Render) =====
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/")
+def home():
+    return "Bot is alive"
 
 
 if __name__ == "__main__":
-    print("🚀 bot started")
-    start_thread()
     app.run(host="0.0.0.0", port=10000)
