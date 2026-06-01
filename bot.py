@@ -75,18 +75,24 @@ def bot_loop():
         time.sleep(60)
 
 
-# ---------------- FLASK ROUTE ----------------
+# ---------------- FLASK ----------------
 @app.route("/")
 def home():
     return "Bot is alive"
 
 
-# ---------------- START ----------------
+# ---------------- START (FIXED FOR RENDER) ----------------
 def start_bot():
-    time.sleep(3)  # даём Flask подняться
+    time.sleep(3)
     bot_loop()
 
 
+@app.before_first_request
+def launch_bot():
+    thread = threading.Thread(target=start_bot, daemon=True)
+    thread.start()
+
+
 if __name__ == "__main__":
-    threading.Thread(target=start_bot, daemon=True).start()
+    print("Flask starting...")
     app.run(host="0.0.0.0", port=10000)
