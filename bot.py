@@ -10,7 +10,8 @@ app = Flask(__name__)
 TOKEN = os.environ["TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
-URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m3031495s10838308"
+# ----- URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m3031495s10838308"
+URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s10838308"
 
 
 # ---------------- TELEGRAM ----------------
