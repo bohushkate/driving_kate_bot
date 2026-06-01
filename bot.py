@@ -2,128 +2,85 @@ import os
 import time
 import threading
 import requests
+from flask import Flask
 from playwright.sync_api import sync_playwright
 
-# ===== ENV =====
+app = Flask(__name__)
+
 TOKEN = os.environ["TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
 # ----- URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m3031495s10838308"
 URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s10838308"
 
-CHECK_EVERY = 60  # секунд
 
-# ===== TELEGRAM =====
 def send_message(text):
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text},
-            timeout=10
-        )
-        print("Telegram:", r.status_code)
-    except Exception as e:
-        print("Telegram error:", e)
+    requests.post(
+        f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+        data={"chat_id": CHAT_ID, "text": text},
+        timeout=20
+    )
 
 
-# ===== CORE CHECK =====
-def check_slots():
-    found_slots = []
-
+def get_bold_days():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
 
-        print("🌐 opening calendar...")
         page.goto(URL, timeout=60000)
-
-        # ждём JS календарь
         page.wait_for_timeout(5000)
 
-        # ===== 1. ищем активные дни =====
-        days = page.query_selector_all("td, button, div")
+        # ⚠️ ВАЖНО: тут мы ищем кликабельные дни календаря
+        # в таких системах они обычно button/div с классами типа "active", "available", "bold"
+        elements = page.query_selector_all(
+            "td:not(.disabled), .day:not(.disabled), .calendar-day:not(.disabled)"
+        )
 
-        clickable_days = []
+        result = []
 
-        for d in days:
-            text = (d.inner_text() or "").strip()
-            cls = (d.get_attribute("class") or "").lower()
+        for el in elements:
+            text = el.inner_text().strip()
 
-            # день = цифра
-            if not text.isdigit():
-                continue
+            # фильтр: только числа (дни месяца)
+            if text.isdigit():
+                # проверяем что элемент кликабельный / активный
+                classes = el.get_attribute("class") or ""
 
-            # фильтр "активных" (гибкий, не ломается от верстки)
-            if any(x in cls for x in [
-                "active", "available", "select", "enabled", "click"
-            ]):
-                clickable_days.append(d)
-
-        print(f"📅 found clickable days: {len(clickable_days)}")
-
-        # ===== 2. кликаем дни и ищем время =====
-        for d in clickable_days[:10]:  # ограничим, чтобы не долбить сайт
-            try:
-                d.click()
-                page.wait_for_timeout(2000)
-
-                # ищем время (как ты говорила — 12:00 появляется)
-                times = page.query_selector_all("text=12:00")
-
-                if times:
-                    found_slots.append("12:00")
-
-            except Exception as e:
-                print("click error:", e)
+                if any(x in classes.lower() for x in ["active", "bold", "available", "free"]):
+                    result.append(text)
 
         browser.close()
+        return result
 
-    return list(set(found_slots))
 
-
-# ===== LOOP =====
 def bot_loop():
-    print("🚀 bot started")
-    send_message("🚀 Бот запущен")
+    print("bot started")
+    send_message("Бот запущен 🚀")
 
-    last_sent = set()
+    last = set()
 
     while True:
         try:
-            print("🔁 checking calendar...")
+            days = set(get_bold_days())
+            print("available days:", days)
 
-            slots = check_slots()
+            if days and days != last:
+                send_message(f"🔥 Доступные дни: {', '.join(sorted(days))}")
 
-            new_slots = [s for s in slots if s not in last_sent]
-
-            if new_slots:
-                msg = "🔥 Найдены слоты:\n" + "\n".join(new_slots)
-                send_message(msg)
-
-                last_sent.update(new_slots)
-
-                print("SENT:", new_slots)
-            else:
-                print("😴 no slots")
+            last = days
 
         except Exception as e:
-            print("💥 LOOP ERROR:", e)
+            print("error:", e)
 
-        time.sleep(CHECK_EVERY)
+        time.sleep(600)
 
 
-# ===== START =====
 threading.Thread(target=bot_loop, daemon=True).start()
 
 
-# ===== KEEP ALIVE (Render) =====
-from flask import Flask
-
-app = Flask(__name__)
-
 @app.route("/")
 def home():
-    return "Bot is alive"
+    return "alive"
 
 
 if __name__ == "__main__":
