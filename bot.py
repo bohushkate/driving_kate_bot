@@ -2,15 +2,13 @@ import os
 import time
 import threading
 import requests
-import re
-
 from flask import Flask
 from playwright.sync_api import sync_playwright
 
 app = Flask(__name__)
 
-TOKEN = os.environ["TOKEN"]
-CHAT_ID = os.environ["CHAT_ID"]
+TOKEN = os.environ.get("TOKEN")
+CHAT_ID = os.environ.get("CHAT_ID")
 
 # ----- URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m3031495s10838308"
 URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s10838308"
@@ -18,10 +16,15 @@ URL = "https://n170404.alteg.io/company/773361/personal/select-time?o=m2824298s1
 
 # ---------------- TELEGRAM ----------------
 def send_message(text):
+    if not TOKEN or not CHAT_ID:
+        print("Telegram env vars missing")
+        return
+
     try:
         requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-            data={"chat_id": CHAT_ID, "text": text}
+            data={"chat_id": CHAT_ID, "text": text},
+            timeout=10
         )
     except Exception as e:
         print("Telegram error:", e)
@@ -29,6 +32,8 @@ def send_message(text):
 
 # ---------------- PLAYWRIGHT ----------------
 def get_page_html():
+    print("▶ запускаю playwright")
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -36,60 +41,51 @@ def get_page_html():
         )
 
         page = browser.new_page()
+        page.goto(URL, timeout=60000)
 
-        print("➡️ OPENING URL:", URL)
-
-        response = page.goto(URL, timeout=60000)
-
-        print("➡️ HTTP STATUS:", response.status if response else "NO RESPONSE")
-
-        # даём JS догрузиться
-        page.wait_for_timeout(8000)
+        time.sleep(5)
 
         html = page.content()
 
-        print("➡️ HTML SIZE:", len(html))
-        print("➡️ HTML PREVIEW:\n", html[:800])
-
         browser.close()
+
+        print("✔ html получен, длина:", len(html))
         return html
 
 
 # ---------------- PARSE ----------------
 def extract_slots(html):
+    import re
     return re.findall(r"\b([01]?\d|2[0-3]):[0-5]\d\b", html)
 
 
 # ---------------- BOT LOOP ----------------
 def bot_loop():
-    print("Бот запущен")
+    print("🔥 BOT LOOP STARTED")
     send_message("Бот запущен 🚀")
 
     last_slots = set()
 
     while True:
         try:
-            print("🔄 Checking site...")
+            print("🔎 Проверяю сайт...")
 
             html = get_page_html()
 
-            # ❗ защита от пустой страницы
-            if not html or len(html) < 1000:
-                print("❌ EMPTY HTML DETECTED")
-                send_message("⚠️ Пустой HTML (страница не загрузилась или блокировка)")
-                time.sleep(60)
+            if not html:
+                print("⚠ HTML EMPTY")
+                send_message("HTML пустой")
                 continue
 
             slots = set(extract_slots(html))
 
-            print("🎯 SLOTS FOUND:", slots)
+            print("📦 slots:", slots)
 
             new_slots = slots - last_slots
 
             if new_slots:
                 msg = "🔥 Новые слоты:\n" + "\n".join(sorted(new_slots))
                 send_message(msg)
-                print("📩 SENT:", new_slots)
 
             last_slots = slots
 
@@ -107,13 +103,10 @@ def home():
 
 
 # ---------------- START ----------------
-def start_bot():
-    thread = threading.Thread(target=bot_loop, daemon=True)
-    thread.start()
-
-
-start_bot()
-
 if __name__ == "__main__":
-    print("Flask starting...")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    print("🚀 STARTING APP")
+
+    t = threading.Thread(target=bot_loop)  # ❗ без daemon
+    t.start()
+
+    app.run(host="0.0.0.0", port=10000)
